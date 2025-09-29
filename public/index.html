@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor DHT11 - ESP32</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .charts {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+        }
+        .current-values {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .value-card {
+            padding: 20px;
+            text-align: center;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .value-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 1.2em;
+        }
+        .value {
+            font-size: 2.5em;
+            font-weight: bold;
+        }
+        @media (max-width: 768px) {
+            .charts, .current-values {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Monitor de Temperatura y Humedad - ESP32</h1>
+        
+        <div id="status" class="status disconnected">
+            Desconectado del servidor
+        </div>
+        
+        <div class="current-values">
+            <div class="value-card">
+                <h3>Temperatura Actual</h3>
+                <div id="currentTemp" class="value">-- °C</div>
+            </div>
+            <div class="value-card">
+                <h3>Humedad Actual</h3>
+                <div id="currentHumidity" class="value">-- %</div>
+            </div>
+        </div>
+        
+        <div class="charts">
+            <div class="chart-container">
+                <canvas id="tempChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="humidityChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuración de gráficos
+        const tempCtx = document.getElementById('tempChart').getContext('2d');
+        const humidityCtx = document.getElementById('humidityChart').getContext('2d');
+
+        const tempChart = new Chart(tempCtx, {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Temperatura (°C)',
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                    tension: 0.4,
+                    data: []
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'minute'
+                        }
+                    },
+                    y: {
+                        beginAtZero: false
+                    }
+                }
+            }
+        });
+
+        const humidityChart = new Chart(humidityCtx, {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Humedad (%)',
+                    borderColor: 'rgb(54, 162, 235)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                    tension: 0.4,
+                    data: []
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'minute'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+
+        // WebSocket connection
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+        let ws = new WebSocket(wsUrl);
+
+        ws.onopen = function() {
+            console.log('Conectado al servidor');
+            updateStatus('Conectado al servidor', true);
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'historical') {
+                // Cargar datos históricos
+                tempChart.data.datasets[0].data = data.data.temperature.map(item => ({
+                    x: new Date(item.x),
+                    y: item.y
+                }));
+                humidityChart.data.datasets[0].data = data.data.humidity.map(item => ({
+                    x: new Date(item.x),
+                    y: item.y
+                }));
+                
+                tempChart.update();
+                humidityChart.update();
+                
+            } else if (data.type === 'update') {
+                // Actualizar con nuevos datos
+                updateCurrentValues(data.temperature, data.humidity);
+                
+                const timestamp = new Date(data.timestamp);
+                tempChart.data.datasets[0].data.push({
+                    x: timestamp,
+                    y: data.temperature
+                });
+                humidityChart.data.datasets[0].data.push({
+                    x: timestamp,
+                    y: data.humidity
+                });
+                
+                // Mantener solo los últimos 50 puntos
+                if (tempChart.data.datasets[0].data.length > 50) {
+                    tempChart.data.datasets[0].data.shift();
+                    humidityChart.data.datasets[0].data.shift();
+                }
+                
+                tempChart.update();
+                humidityChart.update();
+            }
+        };
+
+        ws.onclose = function() {
+            console.log('Conexión cerrada');
+            updateStatus('Desconectado del servidor', false);
+            // Reconectar después de 5 segundos
+            setTimeout(() => {
+                ws = new WebSocket(wsUrl);
+            }, 5000);
+        };
+
+        function updateStatus(message, connected) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
+        }
+
+        function updateCurrentValues(temp, humidity) {
+            document.getElementById('currentTemp').textContent = `${temp.toFixed(1)} °C`;
+            document.getElementById('currentHumidity').textContent = `${humidity.toFixed(1)} %`;
+        }
+    </script>
+</body>
+</html>
